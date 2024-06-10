@@ -15,6 +15,18 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
+from dataclasses import dataclass
+
+@dataclass
+class GPTConfig:
+    block_size: int = 1024
+    vocab_size: int = 50304 # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
+    n_layer: int = 12
+    n_head: int = 12
+    n_embd: int = 768
+    dropout: float = 0.0
+    bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
+
 class LayerNorm(nn.Module):
     """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """
 
@@ -25,6 +37,69 @@ class LayerNorm(nn.Module):
 
     def forward(self, input):
         return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
+
+
+class Padded(nn.Module):
+    def __init__(self, conv: nn.Conv1d):
+        
+        super().__init__()
+        assert conv.stride == (1,)
+        assert conv.padding == (0,)
+        self.conv = conv
+
+    def forward(self, x):
+        padded_x = F.pad(x, (self.n_padding(), 0))
+
+        
+        
+        return self.conv(padded_x)
+
+    def n_padding(self):
+        dilation    = (self.conv.dilation[0] - 1) * (self.conv.kernel_size[0] - 1)
+        kernel_size = self.conv.kernel_size[0]
+        return (dilation + kernel_size - 1)
+
+
+class ConvLayers(nn.Module):
+    def __init__(self, config: GPTConfig, kernel_size: int):
+        super().__init__()
+        self.config = config
+    
+        self.conv_d1 = Padded(nn.Conv1d(
+            in_channels=config.n_head, 
+            out_channels=config.n_head,
+            kernel_size=kernel_size,
+            dilation = 1,
+        ))
+
+        self.conv_d2 = Padded(nn.Conv1d(
+            in_channels=config.n_head,
+            out_channels=config.n_head,
+            kernel_size=kernel_size,
+            dilation=2
+        ))
+
+        self.conv_d4 = Padded(nn.Conv1d(
+            in_channels=config.n_head,
+            out_channels=config.n_head,
+            kernel_size=kernel_size,
+            dilation=4
+        ))
+
+        self.dropout = nn.Dropout(config.dropout)
+
+ 
+
+    def forward(self, x):   
+        x_transposed = x.transpose(-1, -2)
+        conv_x = x_transposed.reshape(x.size(0), self.config.n_head, -1)
+        
+        y1 = self.conv_d1(conv_x)
+        y2 = self.conv_d2(conv_x)
+        y4 = self.conv_d4(conv_x)
+       
+        return self.dropout(y4 + y1 + y2).reshape(x_transposed.shape).transpose(-1, -2)
+
 
 class CausalSelfAttention(nn.Module):
 
@@ -96,24 +171,15 @@ class Block(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
-        self.attn = CausalSelfAttention(config)
+        self.conv = ConvLayers(config, kernel_size=9)
         self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
         self.mlp = MLP(config)
 
     def forward(self, x):
-        x = x + self.attn(self.ln_1(x))
+        x = x + self.conv(self.ln_1(x))
         x = x + self.mlp(self.ln_2(x))
         return x
 
-@dataclass
-class GPTConfig:
-    block_size: int = 1024
-    vocab_size: int = 50304 # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
-    n_layer: int = 12
-    n_head: int = 12
-    n_embd: int = 768
-    dropout: float = 0.0
-    bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
 
 class GPT(nn.Module):
 
