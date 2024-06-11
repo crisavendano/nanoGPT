@@ -18,6 +18,7 @@ $ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=1 --master_addr=123.456.123
 
 import os
 import time
+import datetime
 import math
 import pickle
 from contextlib import nullcontext
@@ -219,13 +220,15 @@ def estimate_loss():
     model.eval()
     
     for split in ['train', 'val']:
+    
         
         losses = torch.zeros(eval_iters)
+    
         
         for k in range(eval_iters):
-            
+    
             X, Y = get_batch(split)
-            
+    
             with ctx:
                 
                 logits, loss = model(X, Y)
@@ -260,16 +263,22 @@ t0 = time.time()
 local_iter_num = 0 # number of iterations in the lifetime of this process
 raw_model = model.module if ddp else model # unwrap DDP container if needed
 running_mfu = -1.0
-while True:
 
+total_time = time.time()
+timeout = 60*60
+
+while True:
+    elapsed = t0 - total_time 
     # determine and set the learning rate for this iteration
     lr = get_lr(iter_num) if decay_lr else learning_rate
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
-
+    
     # evaluate the loss on train/val sets and write checkpoints
     if iter_num % eval_interval == 0 and master_process:
+        
         losses = estimate_loss()
+        
         print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
         if wandb_log:
             wandb.log({
@@ -279,7 +288,7 @@ while True:
                 "lr": lr,
                 "mfu": running_mfu*100, # convert to percentage
             })
-        if losses['val'] < best_val_loss or always_save_checkpoint:
+        if losses['val'] < best_val_loss or always_save_checkpoint or timeout < elapsed:
             best_val_loss = losses['val']
             if iter_num > 0:
                 checkpoint = {
@@ -325,20 +334,23 @@ while True:
     t1 = time.time()
     dt = t1 - t0
     t0 = t1
-    if iter_num % log_interval == 0 and master_process:
+    if (iter_num % log_interval == 0 and master_process) or  timeout < elapsed:
         # get loss as float. note: this is a CPU-GPU sync point
         # scale up to undo the division above, approximating the true total loss (exact would have been a sum)
         lossf = loss.item() * gradient_accumulation_steps
         if local_iter_num >= 5: # let the training loop settle a bit
             mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt)
             running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
-        print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
+        print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}% elapsed {datetime.timedelta(seconds=elapsed)}")
     iter_num += 1
     local_iter_num += 1
 
+
     # termination conditions
-    if iter_num > max_iters:
+    if iter_num > max_iters or  timeout < timeout < elapsed:
         break
+    
+
 
 if ddp:
     destroy_process_group()

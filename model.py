@@ -64,41 +64,45 @@ class ConvLayers(nn.Module):
     def __init__(self, config: GPTConfig, kernel_size: int):
         super().__init__()
         self.config = config
-    
-        self.conv_d1 = Padded(nn.Conv1d(
-            in_channels=config.n_head, 
-            out_channels=config.n_head,
+
+        self.short_range = Padded(nn.Conv1d(
+            in_channels=config.n_embd, 
+            out_channels=config.n_embd,
             kernel_size=kernel_size,
             dilation = 1,
+            groups=config.n_embd,
         ))
 
-        self.conv_d2 = Padded(nn.Conv1d(
-            in_channels=config.n_head,
-            out_channels=config.n_head,
+        self.dilated = Padded(nn.Conv1d(
+            in_channels=config.n_embd, 
+            out_channels=config.n_embd,
             kernel_size=kernel_size,
-            dilation=2
+            dilation = config.n_embd,
+            groups=config.n_embd,
         ))
 
-        self.conv_d4 = Padded(nn.Conv1d(
-            in_channels=config.n_head,
-            out_channels=config.n_head,
+        self.long_range =  Padded(nn.Conv1d(
+            in_channels=config.n_embd, 
+            out_channels=config.n_embd,
             kernel_size=kernel_size,
-            dilation=4
+            dilation = 1,
+            groups=config.n_embd,
         ))
+
 
         self.dropout = nn.Dropout(config.dropout)
 
  
 
     def forward(self, x):   
-        x_transposed = x.transpose(-1, -2)
-        conv_x = x_transposed.reshape(x.size(0), self.config.n_head, -1)
+        x = x.transpose(-1, -2)
         
-        y1 = self.conv_d1(conv_x)
-        y2 = self.conv_d2(conv_x)
-        y4 = self.conv_d4(conv_x)
+        short   = self.short_range(x)
+        dilated = self.dilated(x)
+        long    = self.long_range(dilated)
+        
        
-        return self.dropout(y4 + y1 + y2).reshape(x_transposed.shape).transpose(-1, -2)
+        return self.dropout( short + long).transpose(-1, -2)
 
 
 class CausalSelfAttention(nn.Module):
@@ -171,7 +175,7 @@ class Block(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
-        self.conv = ConvLayers(config, kernel_size=9)
+        self.conv = ConvLayers(config, kernel_size=18)
         self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
         self.mlp = MLP(config)
 
