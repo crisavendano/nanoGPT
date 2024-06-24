@@ -219,7 +219,7 @@ def estimate_loss():
     
     model.eval()
     
-    for split in ['train', 'val']:
+    for split in ['val']:
     
         
         losses = torch.zeros(eval_iters)
@@ -234,6 +234,7 @@ def estimate_loss():
                 logits, loss = model(X, Y)
                 
             losses[k] = loss.item()
+            
         out[split] = losses.mean()
     model.train()
     return out
@@ -265,10 +266,10 @@ raw_model = model.module if ddp else model # unwrap DDP container if needed
 running_mfu = -1.0
 
 total_time = time.time()
-timeout = 60*60
+timeout = 60*4
 
 while True:
-    elapsed = t0 - total_time 
+    elapsed = time.time() - total_time 
     # determine and set the learning rate for this iteration
     lr = get_lr(iter_num) if decay_lr else learning_rate
     for param_group in optimizer.param_groups:
@@ -347,10 +348,18 @@ while True:
 
 
     # termination conditions
-    if iter_num > max_iters or  timeout < timeout < elapsed:
+    if iter_num > max_iters or timeout < elapsed:
+        checkpoint = {
+            'model': raw_model.state_dict(),
+            'optimizer': optimizer.state_dict(),
+            'model_args': model_args,
+            'iter_num': iter_num,
+            'best_val_loss': best_val_loss,
+            'config': config,
+        }
+        print(f"saving checkpoint to {out_dir}")
+        torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
         break
-    
-
 
 if ddp:
     destroy_process_group()

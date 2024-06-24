@@ -1,3 +1,5 @@
+
+
 """
 Full definition of a GPT Language Model, all of it in this single file.
 References:
@@ -69,7 +71,6 @@ class ConvLayers(nn.Module):
             in_channels=config.n_embd, 
             out_channels=config.n_embd,
             kernel_size=kernel_size,
-            dilation = 1,
             groups=config.n_embd,
         ))
 
@@ -77,7 +78,7 @@ class ConvLayers(nn.Module):
             in_channels=config.n_embd, 
             out_channels=config.n_embd,
             kernel_size=kernel_size,
-            dilation = config.n_embd,
+            dilation=kernel_size - 1,
             groups=config.n_embd,
         ))
 
@@ -85,23 +86,16 @@ class ConvLayers(nn.Module):
             in_channels=config.n_embd, 
             out_channels=config.n_embd,
             kernel_size=kernel_size,
-            dilation = 1,
             groups=config.n_embd,
         ))
 
-
         self.dropout = nn.Dropout(config.dropout)
-
- 
 
     def forward(self, x):   
         x = x.transpose(-1, -2)
-        
         short   = self.short_range(x)
         dilated = self.dilated(x)
         long    = self.long_range(dilated)
-        
-       
         return self.dropout( short + long).transpose(-1, -2)
 
 
@@ -175,7 +169,7 @@ class Block(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
-        self.conv = ConvLayers(config, kernel_size=18)
+        self.conv = ConvLayers(config, kernel_size=8)
         self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
         self.mlp = MLP(config)
 
